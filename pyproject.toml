@@ -13,6 +13,7 @@ dependencies = [
     "jinja2>=3.1.6",
     "pint>=0.25.3",
     "pydantic>=2.13.4",
+    "pyvista>=0.48.4",
     "pyyaml>=6.0.3",
 ]
 

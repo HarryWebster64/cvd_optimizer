@@ -3,7 +3,7 @@ stages:
   run_fluid_cfd:
     cmd: >
       cvd openfoam configure --params params.yaml --output-dir openfoam_case &&
-      cvd openfoam run --case openfoam_case
+      cvd openfoam run --case openfoam_case --mock
     deps:
       - params.yaml
       - ../_shared/openfoam/
@@ -15,7 +15,7 @@ stages:
   run_plasma_pic:
     cmd: >
       cvd warpx configure --params params.yaml --fluid-state openfoam_case/terminal_fluid_state.json --output-dir warpx_case &&
-      cvd warpx run --case warpx_case
+      cvd warpx run --case warpx_case --mock
     deps:
       - params.yaml
       - ../_shared/warpx/
@@ -28,7 +28,7 @@ stages:
   run_surface_growth:
     cmd: >
       cvd xolotl configure --params params.yaml --flux-file warpx_case/surface_bombardment_flux.h5 --output-dir xolotl_case &&
-      cvd xolotl run --case xolotl_case
+      cvd xolotl run --case xolotl_case --mock
     deps:
       - params.yaml
       - ../_shared/xolotl/

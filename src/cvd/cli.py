@@ -96,7 +96,8 @@ def openfoam_configure(params_path: Path, output_dir: Path) -> None:
 
 @openfoam.command("run")
 @click.option("--case", "case_dir", required=True, type=click.Path(path_type=Path), help="OpenFOAM case directory")
-def openfoam_run(case_dir: Path) -> None:
+@click.option("--mock", is_flag=True, default=False, help="Skip the real reactingFoam/PyVista handshake and write placeholder outputs")
+def openfoam_run(case_dir: Path, mock: bool) -> None:
     """Run reactingFoam on the configured case, then extract the terminal fluid state."""
     click.echo(f"[openfoam run] would execute reactingFoam in {case_dir}")
 
@@ -106,7 +107,10 @@ def openfoam_run(case_dir: Path) -> None:
     processor_dir.mkdir(parents=True, exist_ok=True)
     (processor_dir / "MOCK_OUTPUT.txt").write_text("placeholder reactingFoam processor0 output\n")
 
-    fluid_state_path = write_terminal_fluid_state(case_dir)
+    try:
+        fluid_state_path = write_terminal_fluid_state(case_dir, mock=mock)
+    except FileNotFoundError as exc:
+        raise click.ClickException(f"{exc}; pass --mock to write placeholder fluid state") from exc
     click.echo(f"[openfoam run] wrote terminal fluid state to {fluid_state_path}")
 
 
@@ -139,7 +143,8 @@ def warpx_configure(params_path: Path, fluid_state_path: Path, output_dir: Path)
 
 @warpx.command("run")
 @click.option("--case", "case_dir", required=True, type=click.Path(path_type=Path), help="WarpX case directory")
-def warpx_run(case_dir: Path) -> None:
+@click.option("--mock", is_flag=True, default=False, help="Skip the real openPMD/HDF5 handshake and write placeholder outputs")
+def warpx_run(case_dir: Path, mock: bool) -> None:
     """Run the WarpX PIC solver on the configured case, then tally the substrate arrival flux."""
     click.echo(f"[warpx run] would execute WarpX in {case_dir}")
 
@@ -149,7 +154,10 @@ def warpx_run(case_dir: Path) -> None:
     openpmd_dir.mkdir(parents=True, exist_ok=True)
     (openpmd_dir / "MOCK_OUTPUT.txt").write_text("placeholder WarpX openPMD diagnostics output\n")
 
-    flux_path = write_surface_bombardment_flux(case_dir)
+    try:
+        flux_path = write_surface_bombardment_flux(case_dir, mock=mock)
+    except ValueError as exc:
+        raise click.ClickException(f"{exc}; pass --mock to write placeholder flux data") from exc
     click.echo(f"[warpx run] wrote surface bombardment flux to {flux_path}")
 
 
@@ -184,9 +192,16 @@ def xolotl_configure(params_path: Path, flux_path: Path, output_dir: Path) -> No
 
 @xolotl.command("run")
 @click.option("--case", "case_dir", required=True, type=click.Path(path_type=Path), help="Xolotl case directory")
-def xolotl_run(case_dir: Path) -> None:
+@click.option("--mock", is_flag=True, default=False, help="Write placeholder growth metrics instead of running the real Xolotl KMC solver")
+def xolotl_run(case_dir: Path, mock: bool) -> None:
     """Run the Xolotl cluster-dynamics/KMC solver on the configured case, then write growth metrics."""
     click.echo(f"[xolotl run] would execute Xolotl in {case_dir}")
+
+    if not mock:
+        raise click.ClickException(
+            "real Xolotl KMC solver integration is not implemented yet; pass --mock to write placeholder growth metrics"
+        )
+
     case_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = _write_crystal_growth_metrics(case_dir)
     click.echo(f"[xolotl run] wrote crystal growth metrics to {metrics_path}")
