@@ -21,7 +21,7 @@ substrate.temperature_K = 1100
 
 # Neutral gas densities seeded from OpenFOAM's terminal fluid state
 # (Data-Handshake A: src/cvd/utils/foam_parser.py)
-neutrals.rho = 0.85
-neutrals.temperature = 1080.0
-neutrals.mass_fraction.CH4 = 0.035
-neutrals.mass_fraction.H2 = 0.965
+neutrals.rho = 0.004422890488058329
+neutrals.temperature = 302.85504150390625
+neutrals.mass_fraction.CH4 = 0.03999999165534973
+neutrals.mass_fraction.H2 = 0.9599998593330383

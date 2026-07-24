@@ -1,0 +1,36 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      H2;
+}
+
+dimensions      [0 0 0 0 0 0 0];
+
+internalField   uniform {{ "%.6f"|format(mass_fractions.H2) }};
+
+boundaryField
+{
+    inlet
+    {
+        type            fixedValue;
+        value           uniform {{ "%.6f"|format(mass_fractions.H2) }};
+    }
+    substrate
+    {
+        type            zeroGradient;
+    }
+    chamberWall
+    {
+        type            zeroGradient;
+    }
+    wedge1
+    {
+        type            wedge;
+    }
+    wedge2
+    {
+        type            wedge;
+    }
+}

@@ -1,0 +1,88 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      blockMeshDict;
+}
+
+// Coarse axisymmetric-wedge mesh for the cylindrical CVD chamber, sized from
+// params.chamber (diameter, height). blockMesh has no native "cylinder"
+// primitive, so this uses OpenFOAM's standard axisymmetric wedge technique:
+// a thin angular slice (+/- {{ wedge_half_angle_deg }} degrees) with a
+// `wedge` boundary type on the two flat faces -- the simplest way to mesh a
+// full cylinder without an O-grid. The curved rim is approximated as a
+// straight chord (negligible error at this angle) to avoid needing arc
+// edges.
+
+convertToMeters 1;
+
+vertices
+(
+{%- for v in vertices %}
+    ({{ "%.6f"|format(v[0]) }} {{ "%.6f"|format(v[1]) }} {{ "%.6f"|format(v[2]) }})
+{%- endfor %}
+);
+
+blocks
+(
+    hex (0 1 2 3 4 5 6 7) ({{ n_r }} 1 {{ n_z }}) simpleGrading (1 1 1)
+);
+
+edges
+(
+);
+
+boundary
+(
+    substrate
+    {
+        type wall;
+        faces
+        (
+            (0 1 2 3)
+        );
+    }
+    inlet
+    {
+        type patch;
+        faces
+        (
+            (4 5 6 7)
+        );
+    }
+    chamberWall
+    {
+        type wall;
+        faces
+        (
+            (1 2 6 5)
+        );
+    }
+    wedge1
+    {
+        type wedge;
+        faces
+        (
+            (0 1 5 4)
+        );
+    }
+    wedge2
+    {
+        type wedge;
+        faces
+        (
+            (3 2 6 7)
+        );
+    }
+);
+
+defaultPatch
+{
+    name    defaultFaces;
+    type    empty;
+}
+
+mergePatchPairs
+(
+);

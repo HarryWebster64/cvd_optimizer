@@ -1,0 +1,23 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      decomposeParDict;
+}
+
+// Also not in the original scoped list, but cvd openfoam run already
+// invokes decomposePar whenever openfoam.n_procs > 1 -- required for that
+// path to run at all. "simple" is used (no external decomposition library
+// dependency) and split entirely along z, since our mesh has plenty of
+// height cells (n_z) relative to any reasonable n_procs.
+
+numberOfSubdomains {{ n_procs }};
+
+method          simple;
+
+simpleCoeffs
+{
+    n           (1 1 {{ n_procs }});
+    delta       0.001;
+}

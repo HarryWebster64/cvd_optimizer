@@ -3,13 +3,18 @@ stages:
   run_fluid_cfd:
     cmd: >
       cvd openfoam configure --params params.yaml --output-dir openfoam_case &&
-      cvd openfoam run --case openfoam_case --params params.yaml --mock
+      cvd openfoam run --case openfoam_case --params params.yaml
     deps:
       - params.yaml
       - ../_shared/openfoam/
     outs:
-      - openfoam_case/processor0/
-      - openfoam_case/terminal_fluid_state.json
+      # The whole directory, not individual sub-paths: a real parallel run
+      # produces processorN/ for however many n_procs, plus
+      # adaptive-timestep-named reconstructed time directories, case.foam,
+      # and the rendered case skeleton -- none of which can be robustly
+      # enumerated ahead of time. Downstream stages can still depend on a
+      # specific file within it (e.g. terminal_fluid_state.json).
+      - openfoam_case/
 
   # Stage 2: Ingest Fluid Profile, Configure & Run WarpX Plasma Physics
   run_plasma_pic:

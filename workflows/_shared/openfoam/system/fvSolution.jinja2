@@ -1,0 +1,59 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSolution;
+}
+
+// See fvSchemes.jinja2 -- required for reactingFoam to run, added beyond
+// the originally scoped four template categories.
+
+solvers
+{
+    "rho.*"
+    {
+        solver          diagonal;
+    }
+
+    p
+    {
+        // PCG rather than GAMG: this coarse mesh (and each parallel
+        // subdomain after decomposePar) is too small for GAMG to build any
+        // coarse levels ("matrix too small for GAMG").
+        solver          PCG;
+        preconditioner  DIC;
+        tolerance       1e-06;
+        relTol          0.01;
+    }
+
+    pFinal
+    {
+        $p;
+        relTol          0;
+    }
+
+    "(U|h|e).*"
+    {
+        solver          PBiCGStab;
+        preconditioner  DILU;
+        tolerance       1e-07;
+        relTol          0.1;
+    }
+
+    "Yi.*"
+    {
+        solver          PBiCGStab;
+        preconditioner  DILU;
+        tolerance       1e-08;
+        relTol          0;
+    }
+}
+
+PIMPLE
+{
+    momentumPredictor yes;
+    nOuterCorrectors  1;
+    nCorrectors       2;
+    nNonOrthogonalCorrectors 0;
+}

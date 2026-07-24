@@ -7,4 +7,4 @@ interstitialTraps = true
 
 # Substrate arrival flux ingested from WarpX's openPMD diagnostics
 # (Data-Handshake B: src/cvd/utils/hdf5_mapper.py)
-fluxFile = warpx_case\surface_bombardment_flux.h5
+fluxFile = warpx_case/surface_bombardment_flux.h5

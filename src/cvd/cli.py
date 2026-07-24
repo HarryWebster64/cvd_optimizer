@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import subprocess
 from pathlib import Path
 
@@ -17,10 +18,16 @@ from cvd.utils.hdf5_mapper import write_surface_bombardment_flux
 from cvd.utils.xolotl_parser import write_crystal_growth_metrics
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_OPENFOAM_TEMPLATE_DIR = _REPO_ROOT / "workflows" / "_shared" / "openfoam"
 _WARPX_TEMPLATE_DIR = _REPO_ROOT / "workflows" / "_shared" / "warpx"
 _WARPX_TEMPLATE_NAME = "inputs.jinja2"
 _XOLOTL_TEMPLATE_DIR = _REPO_ROOT / "workflows" / "_shared" / "xolotl"
 _XOLOTL_TEMPLATE_NAME = "params.jinja2"
+
+# Coarse axisymmetric-wedge mesh settings (see blockMeshDict.jinja2).
+_OPENFOAM_WEDGE_HALF_ANGLE_DEG = 2.5
+_OPENFOAM_N_R = 6
+_OPENFOAM_N_Z = 10
 
 
 def _load_params(params_path: Path) -> CVDParameters:
@@ -37,6 +44,75 @@ def _load_fluid_state(fluid_state_path: Path) -> dict:
         raise click.ClickException(f"fluid state file not found: {fluid_state_path}")
     with open(fluid_state_path) as f:
         return json.load(f)
+
+
+def _openfoam_wedge_vertices(
+    radius_m: float, height_m: float, half_angle_deg: float
+) -> list[tuple[float, float, float]]:
+    """Build the 8 vertices of a thin axisymmetric wedge hex block representing
+    a full cylinder -- OpenFOAM's standard technique for meshing cylindrical
+    geometry without an O-grid. Two vertex pairs sit on the z-axis (r=0),
+    collapsing the hex into a pie-slice; the two flat faces get the `wedge`
+    boundary type.
+    """
+    half_angle_rad = math.radians(half_angle_deg)
+    x = radius_m * math.cos(half_angle_rad)
+    y_neg = -radius_m * math.sin(half_angle_rad)
+    y_pos = radius_m * math.sin(half_angle_rad)
+
+    return [
+        (0.0, 0.0, 0.0),
+        (x, y_neg, 0.0),
+        (x, y_pos, 0.0),
+        (0.0, 0.0, 0.0),
+        (0.0, 0.0, height_m),
+        (x, y_neg, height_m),
+        (x, y_pos, height_m),
+        (0.0, 0.0, height_m),
+    ]
+
+
+def _openfoam_render_context(params: CVDParameters) -> dict:
+    radius_m = params.chamber.diameter.to("meter").magnitude / 2
+    height_m = params.chamber.height.to("meter").magnitude
+
+    return {
+        "params": params,
+        "vertices": _openfoam_wedge_vertices(radius_m, height_m, _OPENFOAM_WEDGE_HALF_ANGLE_DEG),
+        "wedge_half_angle_deg": _OPENFOAM_WEDGE_HALF_ANGLE_DEG,
+        "n_r": _OPENFOAM_N_R,
+        "n_z": _OPENFOAM_N_Z,
+        "n_procs": params.openfoam.n_procs,
+        "chamber_pressure_pa": params.feedstock_gas.pressure.to("pascal").magnitude,
+        "inlet_velocity_mps": params.feedstock_gas.inlet_velocity.to("meter/second").magnitude,
+        "inlet_temperature_k": 300.0,
+        "substrate_temperature_k": params.chamber.substrate_temperature.to("kelvin").magnitude,
+        "mass_fractions": params.feedstock_gas.mass_fractions,
+        "initial_delta_t": 1e-7,
+        "max_delta_t": 1e-3,
+        "end_time": 1e-3,
+        "write_interval": 5e-4,
+    }
+
+
+def _render_openfoam_case(params: CVDParameters, output_dir: Path) -> list[Path]:
+    """Render every *.jinja2 file under workflows/_shared/openfoam/ into
+    output_dir, preserving the system/ constant/ 0/ directory structure."""
+    env = Environment(loader=FileSystemLoader(_OPENFOAM_TEMPLATE_DIR))
+    context = _openfoam_render_context(params)
+
+    written_paths = []
+    for template_path in sorted(_OPENFOAM_TEMPLATE_DIR.rglob("*.jinja2")):
+        relative_path = template_path.relative_to(_OPENFOAM_TEMPLATE_DIR)
+        template = env.get_template(relative_path.as_posix())
+        rendered = template.render(**context)
+
+        target_path = output_dir / relative_path.with_suffix("")
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(rendered)
+        written_paths.append(target_path)
+
+    return written_paths
 
 
 def _render_warpx_inputs(params: CVDParameters, fluid_state: dict) -> str:
@@ -105,9 +181,15 @@ def openfoam() -> None:
 @click.option("--params", "params_path", required=True, type=click.Path(path_type=Path), help="Path to params.yaml")
 @click.option("--output-dir", "output_dir", required=True, type=click.Path(path_type=Path), help="Directory to write the OpenFOAM case into")
 def openfoam_configure(params_path: Path, output_dir: Path) -> None:
-    """Validate params.yaml and render the OpenFOAM case."""
-    _load_params(params_path)
-    click.echo(f"[openfoam configure] validated {params_path}; would write case to {output_dir}")
+    """Validate params.yaml and render the OpenFOAM case (blockMeshDict,
+    controlDict, fvSchemes/fvSolution, thermophysicalProperties, 0/ fields, etc.)."""
+    params = _load_params(params_path)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written_paths = _render_openfoam_case(params, output_dir)
+
+    click.echo(f"[openfoam configure] validated {params_path}")
+    click.echo(f"[openfoam configure] wrote {len(written_paths)} OpenFOAM case files to {output_dir}")
 
 
 @openfoam.command("run")
@@ -135,12 +217,21 @@ def openfoam_run(case_dir: Path, params_path: Path, mock: bool) -> None:
             # needed for a real parallel run.
             _run_solver(["decomposePar"], cwd=case_dir, solver_name="decomposePar")
             _run_solver(
-                ["mpirun", "-np", str(n_procs), "reactingFoam", "-parallel"],
+                # --allow-run-as-root: our Docker image has no non-root
+                # USER, and OpenMPI refuses to launch as root by default.
+                ["mpirun", "--allow-run-as-root", "-np", str(n_procs), "reactingFoam", "-parallel"],
                 cwd=case_dir,
                 solver_name="reactingFoam",
             )
+            # PyVista's OpenFOAMReader reads a single reconstructed case, not
+            # per-processor decomposed output.
+            _run_solver(["reconstructPar"], cwd=case_dir, solver_name="reconstructPar")
         else:
             _run_solver(["reactingFoam"], cwd=case_dir, solver_name="reactingFoam")
+
+        # ParaView/PyVista convention: an empty marker file naming the case
+        # for OpenFOAMReader to pick up.
+        (case_dir / "case.foam").touch()
 
     try:
         fluid_state_path = write_terminal_fluid_state(case_dir, mock=mock)

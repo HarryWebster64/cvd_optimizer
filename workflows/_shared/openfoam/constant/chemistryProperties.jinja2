@@ -1,0 +1,28 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      chemistryProperties;
+}
+
+// reactingFoam reads this unconditionally at startup -- chemistry off
+// means no reaction integration (species just convect/diffuse), matching
+// combustionProperties and the reaction-free thermo mixture above.
+
+chemistry       off;
+
+chemistryType
+{
+    solver          ode;
+    method          standard;
+}
+
+initialChemicalTimeStep 1e-07;
+
+odeCoeffs
+{
+    solver          seulex;
+    absTol          1e-08;
+    relTol          0.01;
+}

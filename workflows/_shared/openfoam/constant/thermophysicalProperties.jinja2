@@ -1,0 +1,67 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      thermophysicalProperties;
+}
+
+// Simplest compressible multi-species thermo package: perfect gas,
+// constant Cp, constant transport properties -- no reaction mechanism
+// (chemistry is switched off in chemistryProperties), so multiComponentMixture
+// is enough; no reactions file needed.
+
+thermoType
+{
+    type            heRhoThermo;
+    mixture         multiComponentMixture;
+    transport       const;
+    thermo          hConst;
+    equationOfState perfectGas;
+    specie          specie;
+    energy          sensibleEnthalpy;
+}
+
+species
+(
+    CH4
+    H2
+);
+
+inertSpecie H2;
+
+CH4
+{
+    specie
+    {
+        molWeight   16.04;
+    }
+    thermodynamics
+    {
+        Cp          2220;
+        Hf          0;
+    }
+    transport
+    {
+        mu          1.1e-05;
+        Pr          0.7;
+    }
+}
+
+H2
+{
+    specie
+    {
+        molWeight   2.016;
+    }
+    thermodynamics
+    {
+        Cp          14300;
+        Hf          0;
+    }
+    transport
+    {
+        mu          8.9e-06;
+        Pr          0.7;
+    }
+}

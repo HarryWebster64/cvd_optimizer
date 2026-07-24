@@ -1,0 +1,36 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      p;
+}
+
+dimensions      [1 -1 -2 0 0 0 0];
+
+internalField   uniform {{ "%.4f"|format(chamber_pressure_pa) }};
+
+boundaryField
+{
+    inlet
+    {
+        type            fixedValue;
+        value           uniform {{ "%.4f"|format(chamber_pressure_pa) }};
+    }
+    substrate
+    {
+        type            zeroGradient;
+    }
+    chamberWall
+    {
+        type            zeroGradient;
+    }
+    wedge1
+    {
+        type            wedge;
+    }
+    wedge2
+    {
+        type            wedge;
+    }
+}
