@@ -22,12 +22,12 @@ stages:
       nfiles: 154
   run_plasma_pic:
     cmd: "cvd warpx configure --params params.yaml --fluid-state openfoam_case/terminal_fluid_state.json
-      --output-dir warpx_case && cvd warpx run --case warpx_case --mock\n"
+      --output-dir warpx_case && cvd warpx run --case warpx_case --params params.yaml\n"
     deps:
     - path: ../_shared/warpx/
       hash: md5
-      md5: 77275a4144e979222b72c0cb5ef8e059.dir
-      size: 1364
+      md5: dde7367aba07b5c861b51df2d888f3fb.dir
+      size: 3754
       nfiles: 1
     - path: openfoam_case/terminal_fluid_state.json
       hash: md5
@@ -39,15 +39,11 @@ stages:
       size: 509
       isexec: true
     outs:
-    - path: warpx_case/diags/openpmd/
+    - path: warpx_case/
       hash: md5
-      md5: b1c34c93979b483f03c3e44295db9f1d.dir
-      size: 45
-      nfiles: 1
-    - path: warpx_case/surface_bombardment_flux.h5
-      hash: md5
-      md5: f9b170049b26da65a7b66ce4118dc195
-      size: 6312
+      md5: 1437f8d6285a17bdad7ca70efeae7684.dir
+      size: 788042
+      nfiles: 17
   run_surface_growth:
     cmd: "cvd xolotl configure --params params.yaml --flux-file warpx_case/surface_bombardment_flux.h5
       --output-dir xolotl_case && cvd xolotl run --case xolotl_case --mock\n"
@@ -64,8 +60,8 @@ stages:
       isexec: true
     - path: warpx_case/surface_bombardment_flux.h5
       hash: md5
-      md5: f9b170049b26da65a7b66ce4118dc195
-      size: 6312
+      md5: 8d422c7c4fb4c6e96d41a6d0a5b6235a
+      size: 6232
     outs:
     - path: xolotl_case/crystal_growth_metrics.csv
       hash: md5

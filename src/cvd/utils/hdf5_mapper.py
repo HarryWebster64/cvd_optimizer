@@ -3,18 +3,20 @@
 WarpX tracks continuous-time particle trajectories using high-performance
 openPMD grid libraries. Xolotl expects a single boundary arrival-flux
 vector to step its cluster-dynamics solver forward in time. This module
-opens WarpX's openPMD HDF5 diagnostics, sums the physical particle weights
-of each species scraped at the substrate (bottom-wall) boundary, integrates
-that count over the steady-state iterations, and tallies the arrival flux
-into surface_bombardment_flux.h5 for `cvd xolotl configure` to consume.
+opens WarpX's dedicated BoundaryScraping diagnostic output, sums the
+physical particle weights of each species absorbed at the substrate
+(bottom-wall, "zlo") boundary, and tallies the arrival flux into
+surface_bombardment_flux.h5 for `cvd xolotl configure` to consume.
 
-Requires real WarpX openPMD output: one HDF5 file per iteration under
-`<warpx_case_dir>/diags/openpmd/`, with each species that WarpX absorbs at
-the lower-z domain boundary written to a companion `<species>_zlo` particle
-group (WarpX's boundary-scraping diagnostic, enabled per-species via
-`<species>.save_particles_at_zlo = 1`). `cvd warpx run` does not yet
-actually invoke WarpX, so this logic isn't exercised against real solver
-output until that lands.
+Requires real WarpX output: `<species>.save_particles_at_zlo = 1` per
+species (workflows/_shared/warpx/inputs.jinja2) plus a second diagnostic
+with `diag_type = BoundaryScraping`, which WarpX writes to
+`<warpx_case_dir>/diags/<scraping_diag_name>/particles_at_zlo/*.h5`. Species
+groups in that file are named directly (e.g. "electrons", "ions") -- the
+"zlo" distinction is carried by the directory, not a name suffix. This was
+determined empirically against a real WarpX 24.04 run (a `<species>_zlo`
+suffix, guessed before that, does not exist); see git history for the
+original guess this replaced.
 """
 
 from __future__ import annotations
@@ -24,20 +26,17 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-# WarpX writes particles absorbed at the lower-z domain boundary (the
-# substrate) into a dedicated per-species scraping buffer, named by
-# appending this suffix to the source species (e.g. "electrons_zlo").
-SUBSTRATE_SCRAPING_SUFFIX = "_zlo"
+# WarpX's BoundaryScraping diagnostic writes each captured boundary's data
+# to diags/<diag_name>/particles_at_<boundary>/ -- our inputs template names
+# the diagnostic "boundary_scraping" and only enables the zlo (substrate)
+# boundary per-species.
+SCRAPING_DIAG_SUBDIR = Path("boundary_scraping") / "particles_at_zlo"
 
-# Iterations before this index are treated as transient ramp-up and skipped
-# when integrating the steady-state arrival flux.
-STEADY_STATE_WARMUP_ITERATIONS = 2
-
-# Substrate area (m^2) and steady-state sampling window (s) used to
+# Substrate area (m^2) and steady-state sampling window (s), used to
 # normalize summed particle weights into a flux. Real usage should derive
-# these from params.chamber (substrate footprint) and
-# params.warpx.n_steps / the PIC timestep instead of relying on these
-# placeholders.
+# these from params.chamber (substrate footprint) and params.warpx.n_steps
+# times the actual PIC timestep -- see cli.py's warpx_run, which computes
+# and passes real values rather than relying on these placeholder defaults.
 DEFAULT_SUBSTRATE_AREA_M2 = 0.0707  # ~30 cm diameter substrate, pi * r^2
 DEFAULT_COLLECTION_WINDOW_S = 1.0e-9
 
@@ -59,20 +58,13 @@ def _iter_openpmd_files(diags_dir: Path) -> list[Path]:
     return sorted(diags_dir.glob("*.h5"))
 
 
-def _iteration_key(h5file: h5py.File) -> str:
-    """WarpX writes one iteration per file in per-timestep mode -- there's
-    exactly one group under /data/."""
-    (iteration,) = h5file["data"].keys()
-    return iteration
+def _iteration_keys(h5file: h5py.File) -> list[str]:
+    return list(h5file["data"].keys())
 
 
-def _substrate_scraped_species(species_names: list[str]) -> list[str]:
-    return [name for name in species_names if name.endswith(SUBSTRATE_SCRAPING_SUFFIX)]
-
-
-def _scraped_weight_sum(particles_group: h5py.Group, scraped_species_name: str) -> float:
-    """Sum the physical particle weights recorded in a substrate-scraping buffer."""
-    weighting = particles_group[scraped_species_name]["weighting"][:]
+def _species_weight_sum(particles_group: h5py.Group, species_name: str) -> float:
+    """Sum the physical particle weights recorded for a scraped species."""
+    weighting = particles_group[species_name]["weighting"][:]
     return float(np.sum(weighting))
 
 
@@ -82,14 +74,13 @@ def extract_surface_bombardment_flux(
     collection_window_s: float = DEFAULT_COLLECTION_WINDOW_S,
     mock: bool = False,
 ) -> dict[str, float]:
-    """Tally the substrate arrival flux from WarpX's openPMD diagnostics.
+    """Tally the substrate arrival flux from WarpX's BoundaryScraping diagnostic.
 
-    Opens each per-iteration openPMD HDF5 file under
-    `warpx_case_dir/diags/openpmd/`, sums the physical particle weights in
-    each species' `_zlo` boundary-scraping buffer, integrates that count
-    over the steady-state iterations (skipping an initial warm-up window),
-    and normalizes by `substrate_area_m2 * collection_window_s` to produce
-    a mean arrival flux in particles / m^2 / s.
+    Opens every openPMD HDF5 file under
+    `warpx_case_dir/diags/boundary_scraping/particles_at_zlo/`, sums each
+    species' physical particle weights across every file and iteration
+    found, and normalizes by `substrate_area_m2 * collection_window_s` to
+    produce a mean arrival flux in particles / m^2 / s.
 
     If `mock` is True, skips HDF5 parsing entirely and returns fixed
     placeholder values -- used until `cvd warpx run` invokes a real PIC solve.
@@ -99,30 +90,23 @@ def extract_surface_bombardment_flux(
     if mock:
         return _mock_bottom_wall_species_flux()
 
-    diags_dir = warpx_case_dir / "diags" / "openpmd"
+    diags_dir = warpx_case_dir / "diags" / SCRAPING_DIAG_SUBDIR
     openpmd_files = _iter_openpmd_files(diags_dir)
 
-    if len(openpmd_files) <= STEADY_STATE_WARMUP_ITERATIONS:
-        raise ValueError(
-            f"not enough openPMD iterations in {diags_dir} to isolate a steady-state window "
-            f"(found {len(openpmd_files)}, need > {STEADY_STATE_WARMUP_ITERATIONS})"
-        )
-    steady_state_files = openpmd_files[STEADY_STATE_WARMUP_ITERATIONS:]
+    if not openpmd_files:
+        raise ValueError(f"no openPMD boundary-scraping files found in {diags_dir}")
 
     species_weight_totals: dict[str, float] = {}
 
-    for path in steady_state_files:
+    for path in openpmd_files:
         with h5py.File(path, "r") as f:
-            iteration = _iteration_key(f)
-            particles_group = f[f"/data/{iteration}/particles"]
-            scraped_species = _substrate_scraped_species(list(particles_group.keys()))
-
-            for scraped_name in scraped_species:
-                base_species = scraped_name.removesuffix(SUBSTRATE_SCRAPING_SUFFIX)
-                weight_sum = _scraped_weight_sum(particles_group, scraped_name)
-                species_weight_totals[base_species] = (
-                    species_weight_totals.get(base_species, 0.0) + weight_sum
-                )
+            for iteration in _iteration_keys(f):
+                particles_group = f[f"/data/{iteration}/particles"]
+                for species_name in particles_group.keys():
+                    weight_sum = _species_weight_sum(particles_group, species_name)
+                    species_weight_totals[species_name] = (
+                        species_weight_totals.get(species_name, 0.0) + weight_sum
+                    )
 
     normalization = substrate_area_m2 * collection_window_s
     return {species: total / normalization for species, total in species_weight_totals.items()}

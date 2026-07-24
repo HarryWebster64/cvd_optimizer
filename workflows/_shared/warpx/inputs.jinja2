@@ -1,8 +1,25 @@
-# Mock WarpX PIC input deck for microwave PECVD plasma.
+# WarpX PIC input deck for microwave PECVD plasma (coarse baseline).
 # Rendered by `cvd warpx configure` (Data-Handshake A: OpenFOAM -> WarpX).
+#
+# Physics simplification: rather than self-consistently driving ionization
+# from an oscillating microwave antenna (a substantial modeling effort on
+# its own), this initializes an already-ionized quasi-neutral plasma
+# (electrons + a representative C+ ion species) at a density derived from
+# the neutral gas density below times an assumed weak-ionization fraction,
+# and lets its own space-charge dynamics plus a thermal spread carry
+# particles to the absorbing boundaries -- including the substrate (zlo),
+# which is what Data-Handshake B (src/cvd/utils/hdf5_mapper.py) reads.
+#
+# microwave_source.frequency/power aren't wired into the physics yet --
+# recorded here for a future antenna-driven revision:
+#   frequency_Hz (not yet used) = {{ params.microwave_source.frequency.to("hertz").magnitude }}
+#   power_W (not yet used)      = {{ params.microwave_source.power.to("watt").magnitude }}
 
 max_step = {{ params.warpx.n_steps }}
-amr.n_cell = {{ params.warpx.scoring_mesh.n_bins_xyz[0] }} {{ params.warpx.scoring_mesh.n_bins_xyz[1] }} {{ params.warpx.scoring_mesh.n_bins_xyz[2] }}
+amr.n_cell = {{ n_cell_x }} {{ n_cell_y }} {{ n_cell_z }}
+amr.max_grid_size = {{ n_cell_x }}
+amr.blocking_factor = {{ n_cell_x }}
+amr.max_level = 0
 
 geometry.dims = 3
 geometry.prob_lo = 0.0 0.0 0.0
@@ -10,18 +27,59 @@ geometry.prob_hi = {{ params.chamber.diameter.to("meter").magnitude }} {{ params
 
 boundary.field_lo = pec pec pec
 boundary.field_hi = pec pec pec
+boundary.particle_lo = Absorbing Absorbing Absorbing
+boundary.particle_hi = Absorbing Absorbing Absorbing
 
 algo.maxwell_solver = yee
+algo.particle_shape = 1
 warpx.cfl = 1.0
 
-microwave_source.frequency_Hz = {{ params.microwave_source.frequency.to("hertz").magnitude }}
-microwave_source.power_W = {{ params.microwave_source.power.to("watt").magnitude }}
+# Pre-ionized quasi-neutral plasma: equal electron / C+ ion number density,
+# derived from the OpenFOAM substrate-adjacent neutral gas density
+# (Data-Handshake A) times an assumed weak-ionization fraction. A thermal
+# (Gaussian) momentum spread, rather than particles starting at rest, is
+# what actually gets some particles moving toward the absorbing boundaries
+# within the step budget.
+particles.species_names = electrons ions
 
-substrate.temperature_K = {{ params.chamber.substrate_temperature.to("kelvin").magnitude }}
+electrons.charge = -q_e
+electrons.mass = m_e
+electrons.injection_style = NUniformPerCell
+electrons.num_particles_per_cell_each_dim = 1 1 {{ particles_per_cell }}
+electrons.profile = constant
+electrons.density = {{ plasma_density_per_m3 }}
+electrons.momentum_distribution_type = gaussian
+electrons.ux_th = {{ electron_thermal_beta }}
+electrons.uy_th = {{ electron_thermal_beta }}
+electrons.uz_th = {{ electron_thermal_beta }}
+electrons.save_particles_at_zlo = 1
 
-# Neutral gas densities seeded from OpenFOAM's terminal fluid state
-# (Data-Handshake A: src/cvd/utils/foam_parser.py)
-neutrals.rho = {{ fluid_state.substrate_boundary_layer.rho }}
-neutrals.temperature = {{ fluid_state.substrate_boundary_layer.temperature }}
-neutrals.mass_fraction.CH4 = {{ fluid_state.substrate_boundary_layer.mass_fractions.CH4 }}
-neutrals.mass_fraction.H2 = {{ fluid_state.substrate_boundary_layer.mass_fractions.H2 }}
+ions.charge = q_e
+ions.mass = {{ ion_mass_kg }}
+ions.injection_style = NUniformPerCell
+ions.num_particles_per_cell_each_dim = 1 1 {{ particles_per_cell }}
+ions.profile = constant
+ions.density = {{ plasma_density_per_m3 }}
+ions.momentum_distribution_type = gaussian
+ions.ux_th = {{ ion_thermal_beta }}
+ions.uy_th = {{ ion_thermal_beta }}
+ions.uz_th = {{ ion_thermal_beta }}
+ions.save_particles_at_zlo = 1
+
+# Regular field/particle dump (live particles only -- does not include
+# anything absorbed at a boundary).
+diagnostics.diags_names = diag1 boundary_scraping
+diag1.intervals = {{ diag_intervals }}
+diag1.diag_type = Full
+diag1.format = openpmd
+diag1.openpmd_backend = h5
+diag1.fields_to_plot = none
+
+# BoundaryScraping: the dedicated diagnostic type that actually flushes the
+# particles buffered by save_particles_at_zlo above to disk (the Full
+# diagnostic above never sees absorbed particles). Consumed by
+# src/cvd/utils/hdf5_mapper.py (Data-Handshake B). No intervals set --
+# WarpX's default is to write this once, at the end of the run.
+boundary_scraping.diag_type = BoundaryScraping
+boundary_scraping.format = openpmd
+boundary_scraping.openpmd_backend = h5

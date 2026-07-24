@@ -20,14 +20,16 @@ stages:
   run_plasma_pic:
     cmd: >
       cvd warpx configure --params params.yaml --fluid-state openfoam_case/terminal_fluid_state.json --output-dir warpx_case &&
-      cvd warpx run --case warpx_case --mock
+      cvd warpx run --case warpx_case --params params.yaml
     deps:
       - params.yaml
       - ../_shared/warpx/
       - openfoam_case/terminal_fluid_state.json
     outs:
-      - warpx_case/diags/openpmd/
-      - warpx_case/surface_bombardment_flux.h5
+      # Whole directory, same reasoning as run_fluid_cfd above: the number
+      # and names of diags/openpmd/*.h5 iteration files depend on n_steps
+      # and diag_intervals, which can't be enumerated ahead of time.
+      - warpx_case/
 
   # Stage 3: Ingest Plasma Fluence, Configure & Run Xolotl Surface Deposition
   run_surface_growth:

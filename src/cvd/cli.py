@@ -29,6 +29,22 @@ _OPENFOAM_WEDGE_HALF_ANGLE_DEG = 2.5
 _OPENFOAM_N_R = 6
 _OPENFOAM_N_Z = 10
 
+# Coarse PIC grid + pre-ionized plasma initialization (see inputs.jinja2).
+# amr.n_cell is hardcoded small for a smoke test rather than using
+# params.warpx.scoring_mesh directly (128x128x64 = 1M+ cells, impractical
+# to validate against); wiring up real resolution is a follow-up, same as
+# openfoam.mesh.cell_target above.
+_WARPX_N_CELL = (8, 8, 8)
+_WARPX_CFL = 1.0
+_WARPX_PARTICLES_PER_CELL = 2
+_WARPX_IONIZATION_FRACTION = 1e-4
+_WARPX_ELECTRON_MASS_KG = 9.1093837015e-31
+_WARPX_CARBON_ION_MASS_KG = 12.011 * 1.66053906660e-27  # representative C+ ion
+_WARPX_MOLAR_MASS_KG_PER_MOL = {"CH4": 0.01604, "H2": 0.002016}
+_BOLTZMANN_J_PER_K = 1.380649e-23
+_AVOGADRO_PER_MOL = 6.02214076e23
+_SPEED_OF_LIGHT_M_S = 2.99792458e8
+
 
 def _load_params(params_path: Path) -> CVDParameters:
     try:
@@ -115,10 +131,77 @@ def _render_openfoam_case(params: CVDParameters, output_dir: Path) -> list[Path]
     return written_paths
 
 
+def _warpx_render_context(params: CVDParameters, fluid_state: dict) -> dict:
+    """Build the WarpX inputs-deck context, including a coarse pre-ionized
+    plasma initialization derived from the Data-Handshake A fluid state.
+
+    Physics simplification: rather than self-consistently driving
+    ionization from an oscillating microwave antenna, this initializes an
+    already-ionized quasi-neutral plasma (electrons + a representative C+
+    ion) at a density derived from the neutral gas density times an
+    assumed weak-ionization fraction, and lets space-charge dynamics plus
+    a thermal spread carry particles to the absorbing boundaries.
+    """
+    boundary_layer = fluid_state["substrate_boundary_layer"]
+    rho_kg_m3 = boundary_layer["rho"]
+    temperature_k = boundary_layer["temperature"]
+    mass_fractions = boundary_layer["mass_fractions"]
+
+    mean_molar_mass_kg_per_mol = sum(
+        mass_fractions.get(species, 0.0) * molar_mass
+        for species, molar_mass in _WARPX_MOLAR_MASS_KG_PER_MOL.items()
+    )
+    neutral_number_density_per_m3 = rho_kg_m3 / mean_molar_mass_kg_per_mol * _AVOGADRO_PER_MOL
+    plasma_density_per_m3 = neutral_number_density_per_m3 * _WARPX_IONIZATION_FRACTION
+
+    def thermal_beta(mass_kg: float) -> float:
+        v_thermal_m_s = math.sqrt(_BOLTZMANN_J_PER_K * temperature_k / mass_kg)
+        return v_thermal_m_s / _SPEED_OF_LIGHT_M_S
+
+    diag_intervals = max(1, params.warpx.n_steps // 10)
+
+    return {
+        "params": params,
+        "n_cell_x": _WARPX_N_CELL[0],
+        "n_cell_y": _WARPX_N_CELL[1],
+        "n_cell_z": _WARPX_N_CELL[2],
+        "particles_per_cell": _WARPX_PARTICLES_PER_CELL,
+        "plasma_density_per_m3": plasma_density_per_m3,
+        "ion_mass_kg": _WARPX_CARBON_ION_MASS_KG,
+        "electron_thermal_beta": thermal_beta(_WARPX_ELECTRON_MASS_KG),
+        "ion_thermal_beta": thermal_beta(_WARPX_CARBON_ION_MASS_KG),
+        "diag_intervals": diag_intervals,
+    }
+
+
 def _render_warpx_inputs(params: CVDParameters, fluid_state: dict) -> str:
     env = Environment(loader=FileSystemLoader(_WARPX_TEMPLATE_DIR))
     template = env.get_template(_WARPX_TEMPLATE_NAME)
-    return template.render(params=params, fluid_state=fluid_state)
+    return template.render(**_warpx_render_context(params, fluid_state))
+
+
+def _warpx_flux_normalization(params: CVDParameters) -> tuple[float, float]:
+    """Compute the real substrate area and total simulated duration for
+    Data-Handshake B's flux normalization, matching the grid/CFL settings
+    `_warpx_render_context` puts in the rendered inputs deck.
+
+    WarpX's Yee-solver timestep isn't a free parameter -- it's set by the
+    CFL condition from the cell size, so it's derived here with the same
+    formula WarpX itself uses, rather than guessed at.
+    """
+    radius_m = params.chamber.diameter.to("meter").magnitude / 2
+    height_m = params.chamber.height.to("meter").magnitude
+    substrate_area_m2 = math.pi * radius_m**2
+
+    dx = params.chamber.diameter.to("meter").magnitude / _WARPX_N_CELL[0]
+    dy = params.chamber.diameter.to("meter").magnitude / _WARPX_N_CELL[1]
+    dz = height_m / _WARPX_N_CELL[2]
+    dt_s = _WARPX_CFL / (
+        _SPEED_OF_LIGHT_M_S * math.sqrt(1 / dx**2 + 1 / dy**2 + 1 / dz**2)
+    )
+    collection_window_s = params.warpx.n_steps * dt_s
+
+    return substrate_area_m2, collection_window_s
 
 
 def _render_xolotl_params(params: CVDParameters, flux_path: Path) -> str:
@@ -269,8 +352,9 @@ def warpx_configure(params_path: Path, fluid_state_path: Path, output_dir: Path)
 
 @warpx.command("run")
 @click.option("--case", "case_dir", required=True, type=click.Path(path_type=Path), help="WarpX case directory")
+@click.option("--params", "params_path", required=True, type=click.Path(path_type=Path), help="Path to params.yaml (used to derive substrate area and collection window when not mocking)")
 @click.option("--mock", is_flag=True, default=False, help="Skip the real WarpX solve and openPMD/HDF5 handshake, and write placeholder outputs")
-def warpx_run(case_dir: Path, mock: bool) -> None:
+def warpx_run(case_dir: Path, params_path: Path, mock: bool) -> None:
     """Run the WarpX PIC solver on the configured case, then tally the substrate arrival flux."""
     if mock:
         click.echo(f"[warpx run] --mock: skipping WarpX in {case_dir}")
@@ -279,11 +363,18 @@ def warpx_run(case_dir: Path, mock: bool) -> None:
         openpmd_dir = case_dir / "diags" / "openpmd"
         openpmd_dir.mkdir(parents=True, exist_ok=True)
         (openpmd_dir / "MOCK_OUTPUT.txt").write_text("placeholder WarpX openPMD diagnostics output\n")
+        flux_kwargs = {}
     else:
         _run_solver(["warpx", "inputs"], cwd=case_dir, solver_name="warpx")
+        params = _load_params(params_path)
+        substrate_area_m2, collection_window_s = _warpx_flux_normalization(params)
+        flux_kwargs = {
+            "substrate_area_m2": substrate_area_m2,
+            "collection_window_s": collection_window_s,
+        }
 
     try:
-        flux_path = write_surface_bombardment_flux(case_dir, mock=mock)
+        flux_path = write_surface_bombardment_flux(case_dir, mock=mock, **flux_kwargs)
     except ValueError as exc:
         raise click.ClickException(f"{exc}; pass --mock to write placeholder flux data") from exc
     click.echo(f"[warpx run] wrote surface bombardment flux to {flux_path}")
