@@ -1,0 +1,27 @@
+# Mock WarpX PIC input deck for microwave PECVD plasma.
+# Rendered by `cvd warpx configure` (Data-Handshake A: OpenFOAM -> WarpX).
+
+max_step = 50000
+amr.n_cell = 128 128 64
+
+geometry.dims = 3
+geometry.prob_lo = 0.0 0.0 0.0
+geometry.prob_hi = 0.3 0.3 0.4
+
+boundary.field_lo = pec pec pec
+boundary.field_hi = pec pec pec
+
+algo.maxwell_solver = yee
+warpx.cfl = 1.0
+
+microwave_source.frequency_Hz = 2450000000.0
+microwave_source.power_W = 3500.0
+
+substrate.temperature_K = 1100
+
+# Neutral gas densities seeded from OpenFOAM's terminal fluid state
+# (Data-Handshake A: src/cvd/utils/foam_parser.py)
+neutrals.rho = 0.85
+neutrals.temperature = 1080.0
+neutrals.mass_fraction.CH4 = 0.035
+neutrals.mass_fraction.H2 = 0.965

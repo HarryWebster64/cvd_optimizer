@@ -1,0 +1,27 @@
+# Mock WarpX PIC input deck for microwave PECVD plasma.
+# Rendered by `cvd warpx configure` (Data-Handshake A: OpenFOAM -> WarpX).
+
+max_step = {{ params.warpx.n_steps }}
+amr.n_cell = {{ params.warpx.scoring_mesh.n_bins_xyz[0] }} {{ params.warpx.scoring_mesh.n_bins_xyz[1] }} {{ params.warpx.scoring_mesh.n_bins_xyz[2] }}
+
+geometry.dims = 3
+geometry.prob_lo = 0.0 0.0 0.0
+geometry.prob_hi = {{ params.chamber.diameter.to("meter").magnitude }} {{ params.chamber.diameter.to("meter").magnitude }} {{ params.chamber.height.to("meter").magnitude }}
+
+boundary.field_lo = pec pec pec
+boundary.field_hi = pec pec pec
+
+algo.maxwell_solver = yee
+warpx.cfl = 1.0
+
+microwave_source.frequency_Hz = {{ params.microwave_source.frequency.to("hertz").magnitude }}
+microwave_source.power_W = {{ params.microwave_source.power.to("watt").magnitude }}
+
+substrate.temperature_K = {{ params.chamber.substrate_temperature.to("kelvin").magnitude }}
+
+# Neutral gas densities seeded from OpenFOAM's terminal fluid state
+# (Data-Handshake A: src/cvd/utils/foam_parser.py)
+neutrals.rho = {{ fluid_state.substrate_boundary_layer.rho }}
+neutrals.temperature = {{ fluid_state.substrate_boundary_layer.temperature }}
+neutrals.mass_fraction.CH4 = {{ fluid_state.substrate_boundary_layer.mass_fractions.CH4 }}
+neutrals.mass_fraction.H2 = {{ fluid_state.substrate_boundary_layer.mass_fractions.H2 }}

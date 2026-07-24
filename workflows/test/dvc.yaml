@@ -1,0 +1,37 @@
+stages:
+  # Stage 1: Configure & Run OpenFOAM Fluid Mechanics
+  run_fluid_cfd:
+    cmd: >
+      cvd openfoam configure --params params.yaml --output-dir openfoam_case &&
+      cvd openfoam run --case openfoam_case
+    deps:
+      - params.yaml
+      - ../_shared/openfoam/
+    outs:
+      - openfoam_case/processor0/
+      - openfoam_case/terminal_fluid_state.json
+
+  # Stage 2: Ingest Fluid Profile, Configure & Run WarpX Plasma Physics
+  run_plasma_pic:
+    cmd: >
+      cvd warpx configure --params params.yaml --fluid-state openfoam_case/terminal_fluid_state.json --output-dir warpx_case &&
+      cvd warpx run --case warpx_case
+    deps:
+      - params.yaml
+      - ../_shared/warpx/
+      - openfoam_case/terminal_fluid_state.json
+    outs:
+      - warpx_case/diags/openpmd/
+      - warpx_case/surface_bombardment_flux.h5
+
+  # Stage 3: Ingest Plasma Fluence, Configure & Run Xolotl Surface Deposition
+  run_surface_growth:
+    cmd: >
+      cvd xolotl configure --params params.yaml --flux-file warpx_case/surface_bombardment_flux.h5 --output-dir xolotl_case &&
+      cvd xolotl run --case xolotl_case
+    deps:
+      - params.yaml
+      - ../_shared/xolotl/
+      - warpx_case/surface_bombardment_flux.h5
+    outs:
+      - xolotl_case/crystal_growth_metrics.csv

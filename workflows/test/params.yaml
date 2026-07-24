@@ -1,0 +1,32 @@
+chamber:
+  type: cylinder
+  diameter: "30 cm"
+  height: "40 cm"
+  substrate_temperature: "1100 K"
+
+feedstock_gas:
+  pressure: "40 torr"
+  inlet_velocity: "50 cm/s"
+  mass_fractions:
+    CH4: 0.04
+    H2: 0.96
+
+microwave_source:
+  frequency: "2.45 GHz"
+  power: "3.5 kW"
+
+openfoam:
+  version: "13"
+  solver: "reactingFoam"
+  mesh:
+    cell_target: "2 mm"
+
+warpx:
+  n_steps: 50000
+  scoring_mesh:
+    n_bins_xyz: [128, 128, 64]
+
+xolotl:
+  dimensions: 1
+  runtime: "12 h"
+  interstitial_traps: true

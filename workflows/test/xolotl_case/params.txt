@@ -1,0 +1,10 @@
+# Mock Xolotl cluster-dynamics/KMC parameter deck.
+# Rendered by `cvd xolotl configure` (Data-Handshake B: WarpX -> Xolotl).
+
+dimensions = 1
+runtime = 43200
+interstitialTraps = true
+
+# Substrate arrival flux ingested from WarpX's openPMD diagnostics
+# (Data-Handshake B: src/cvd/utils/hdf5_mapper.py)
+fluxFile = warpx_case\surface_bombardment_flux.h5

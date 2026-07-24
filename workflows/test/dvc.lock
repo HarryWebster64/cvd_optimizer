@@ -1,0 +1,74 @@
+schema: '2.0'
+stages:
+  run_fluid_cfd:
+    cmd: "cvd openfoam configure --params params.yaml --output-dir openfoam_case &&
+      cvd openfoam run --case openfoam_case\n"
+    deps:
+    - path: ../_shared/openfoam/
+      hash: md5
+      md5: 6ffbaaad7b4ac6e1afabed19a80b2560.dir
+      size: 0
+      nfiles: 1
+    - path: params.yaml
+      hash: md5
+      md5: cf3f42b93e1adc484ac6dde2a202fc10
+      size: 496
+    outs:
+    - path: openfoam_case/processor0/
+      hash: md5
+      md5: e794f814ee2cf3a0cfd1f9b4ea15f63b.dir
+      size: 44
+      nfiles: 1
+    - path: openfoam_case/terminal_fluid_state.json
+      hash: md5
+      md5: 3eb2e59062fdb574163961c089467f6e
+      size: 221
+  run_plasma_pic:
+    cmd: "cvd warpx configure --params params.yaml --fluid-state openfoam_case/terminal_fluid_state.json
+      --output-dir warpx_case && cvd warpx run --case warpx_case\n"
+    deps:
+    - path: ../_shared/warpx/
+      hash: md5
+      md5: 77275a4144e979222b72c0cb5ef8e059.dir
+      size: 1364
+      nfiles: 1
+    - path: openfoam_case/terminal_fluid_state.json
+      hash: md5
+      md5: 3eb2e59062fdb574163961c089467f6e
+      size: 221
+    - path: params.yaml
+      hash: md5
+      md5: cf3f42b93e1adc484ac6dde2a202fc10
+      size: 496
+    outs:
+    - path: warpx_case/diags/openpmd/
+      hash: md5
+      md5: 065859ce7b996e2b836181f0db7c65f7.dir
+      size: 46
+      nfiles: 1
+    - path: warpx_case/surface_bombardment_flux.h5
+      hash: md5
+      md5: f9b170049b26da65a7b66ce4118dc195
+      size: 6312
+  run_surface_growth:
+    cmd: "cvd xolotl configure --params params.yaml --flux-file warpx_case/surface_bombardment_flux.h5
+      --output-dir xolotl_case && cvd xolotl run --case xolotl_case\n"
+    deps:
+    - path: ../_shared/xolotl/
+      hash: md5
+      md5: e88ff981abe36e0ef6e70029a3ecaab8.dir
+      size: 444
+      nfiles: 1
+    - path: params.yaml
+      hash: md5
+      md5: cf3f42b93e1adc484ac6dde2a202fc10
+      size: 496
+    - path: warpx_case/surface_bombardment_flux.h5
+      hash: md5
+      md5: f9b170049b26da65a7b66ce4118dc195
+      size: 6312
+    outs:
+    - path: xolotl_case/crystal_growth_metrics.csv
+      hash: md5
+      md5: a6610d2c276752dcda98330e853150f5
+      size: 175
