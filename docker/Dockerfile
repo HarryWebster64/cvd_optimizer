@@ -1,8 +1,9 @@
-# Reproducible base image for the CVD Optimizer: OS-level build tooling for
-# OpenFOAM (MPI, HDF5), WarpX, and Xolotl, plus uv for the Python CLI.
-# Building Xolotl is still a follow-up. OpenFOAM is installed from prebuilt
-# packages (compiling it from source takes hours); WarpX has no apt package
-# at all, so it's compiled from source below.
+# Reproducible base image for the CVD Optimizer: OpenFOAM, WarpX, and Xolotl,
+# plus uv for the Python CLI. OpenFOAM is installed from prebuilt packages
+# (compiling it from source takes hours); WarpX and Xolotl have no apt
+# packages, so both are compiled from source below. HDF5 is the *parallel*
+# (openmpi) build -- WarpX's openPMD diagnostics and Xolotl both do
+# MPI-collective I/O, and the plain serial libhdf5-dev can't do that.
 
 FROM ubuntu:22.04
 
@@ -10,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     mpi-default-dev \
-    libhdf5-dev \
+    libhdf5-openmpi-dev \
     git \
     curl \
     ca-certificates \
@@ -63,5 +64,45 @@ RUN cmake --build /opt/WarpX/build -j"$(nproc)" \
     && test -n "$WARPX_BIN" \
     && ln -s "$WARPX_BIN" /usr/local/bin/warpx \
     && echo "Symlinked $WARPX_BIN -> /usr/local/bin/warpx"
+
+# Xolotl-specific OS dependencies, kept in their own layer (rather than the
+# shared apt list above) so further Xolotl dependency fixes don't force
+# Docker to redo the OpenFOAM/WarpX layers, which don't need them.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libboost-log-dev \
+    libboost-program-options-dev \
+    libboost-test-dev \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Xolotl from source (no apt package exists). No --branch pinned --
+# clone the repo's actual default branch, whether it's named main or master.
+# Same clone / configure / build layer split as WarpX, for the same caching
+# reasons.
+#
+# Xolotl needs PETSc built *with* Kokkos and KokkosKernels -- Ubuntu's
+# petsc-dev (3.15, no Kokkos backend) can't satisfy that, and there's no
+# flag that retrofits it. Xolotl's own docs recommend -DXolotl_BUILD_PETSC=ON
+# instead: its CMake configure step fetches and compiles Kokkos,
+# KokkosKernels, and PETSc itself. -DXolotl_ENABLE_OPENMP=ON selects the
+# CPU-only Kokkos backend, matching WarpX's -DWarpX_COMPUTE=OMP above.
+RUN git clone --depth 1 https://github.com/ORNL-Fusion/xolotl.git /opt/xolotl
+
+RUN cmake -S /opt/xolotl -B /opt/xolotl/build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DXolotl_BUILD_PETSC=ON \
+    -DXolotl_ENABLE_OPENMP=ON \
+    || (echo '--- plsm_configure.out (tail) ---'; tail -n 100 /opt/xolotl/build/external/plsm_configure.out 2>/dev/null; \
+        echo '--- petsc_build.out (tail) ---'; tail -n 200 /opt/xolotl/build/external/petsc_build.out 2>/dev/null; \
+        exit 1)
+
+# Exact output location/name isn't guaranteed ahead of time, so search the
+# build tree for an executable file named `xolotl` rather than hardcoding a
+# path, mirroring the WarpX glob above.
+RUN cmake --build /opt/xolotl/build -j"$(nproc)" \
+    && XOLOTL_BIN=$(find /opt/xolotl/build -maxdepth 6 -type f -iname 'xolotl' -perm -u+x | head -n 1) \
+    && test -n "$XOLOTL_BIN" \
+    && ln -s "$XOLOTL_BIN" /usr/local/bin/xolotl \
+    && echo "Symlinked $XOLOTL_BIN -> /usr/local/bin/xolotl"
 
 WORKDIR /workspace
