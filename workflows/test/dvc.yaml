@@ -3,7 +3,7 @@ stages:
   run_fluid_cfd:
     cmd: >
       cvd openfoam configure --params params.yaml --output-dir openfoam_case &&
-      cvd openfoam run --case openfoam_case --mock
+      cvd openfoam run --case openfoam_case --params params.yaml --mock
     deps:
       - params.yaml
       - ../_shared/openfoam/

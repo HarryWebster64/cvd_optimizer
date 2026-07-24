@@ -18,6 +18,7 @@ microwave_source:
 openfoam:
   version: "13"
   solver: "reactingFoam"
+  n_procs: 4
   mesh:
     cell_target: "2 mm"
 

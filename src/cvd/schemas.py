@@ -114,6 +114,7 @@ class OpenFOAMMeshConfig(_QuantityModel):
 class OpenFOAMConfig(BaseModel):
     version: str
     solver: str
+    n_procs: int = Field(ge=1)
     mesh: OpenFOAMMeshConfig
 
 

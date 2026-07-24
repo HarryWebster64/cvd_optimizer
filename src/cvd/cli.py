@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import subprocess
 from pathlib import Path
 
 import click
@@ -13,6 +14,7 @@ from pydantic import ValidationError
 from cvd.schemas import CVDParameters
 from cvd.utils.foam_parser import write_terminal_fluid_state
 from cvd.utils.hdf5_mapper import write_surface_bombardment_flux
+from cvd.utils.xolotl_parser import write_crystal_growth_metrics
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WARPX_TEMPLATE_DIR = _REPO_ROOT / "workflows" / "_shared" / "warpx"
@@ -47,6 +49,20 @@ def _render_xolotl_params(params: CVDParameters, flux_path: Path) -> str:
     env = Environment(loader=FileSystemLoader(_XOLOTL_TEMPLATE_DIR))
     template = env.get_template(_XOLOTL_TEMPLATE_NAME)
     return template.render(params=params, flux_path=flux_path)
+
+
+def _run_solver(cmd: list[str], cwd: Path, solver_name: str) -> None:
+    """Run a solver executable with its stdout/stderr streamed live to the
+    terminal (subprocess.run inherits the parent's file descriptors by
+    default), raising a clean ClickException if it fails to start or exits
+    non-zero."""
+    click.echo(f"[{solver_name}] running: {' '.join(cmd)} (cwd={cwd})")
+    try:
+        subprocess.run(cmd, cwd=cwd, check=True)
+    except FileNotFoundError as exc:
+        raise click.ClickException(f"{solver_name} executable not found: {cmd[0]!r}") from exc
+    except subprocess.CalledProcessError as exc:
+        raise click.ClickException(f"{solver_name} crashed (exit code {exc.returncode})") from exc
 
 
 # Mock crystal growth trajectory, standing in for real Xolotl cluster-dynamics
@@ -96,16 +112,35 @@ def openfoam_configure(params_path: Path, output_dir: Path) -> None:
 
 @openfoam.command("run")
 @click.option("--case", "case_dir", required=True, type=click.Path(path_type=Path), help="OpenFOAM case directory")
-@click.option("--mock", is_flag=True, default=False, help="Skip the real reactingFoam/PyVista handshake and write placeholder outputs")
-def openfoam_run(case_dir: Path, mock: bool) -> None:
-    """Run reactingFoam on the configured case, then extract the terminal fluid state."""
-    click.echo(f"[openfoam run] would execute reactingFoam in {case_dir}")
+@click.option("--params", "params_path", required=True, type=click.Path(path_type=Path), help="Path to params.yaml (used for openfoam.n_procs when not mocking)")
+@click.option("--mock", is_flag=True, default=False, help="Skip the real blockMesh/reactingFoam solve and PyVista handshake, and write placeholder outputs")
+def openfoam_run(case_dir: Path, params_path: Path, mock: bool) -> None:
+    """Run blockMesh + reactingFoam (parallel via decomposePar/mpirun when n_procs > 1) on the configured case, then extract the terminal fluid state."""
+    if mock:
+        click.echo(f"[openfoam run] --mock: skipping blockMesh/reactingFoam in {case_dir}")
+        # Stand in for reactingFoam's parallel-decomposition output directory
+        # until a real (parallel) solver run is wired up.
+        processor_dir = case_dir / "processor0"
+        processor_dir.mkdir(parents=True, exist_ok=True)
+        (processor_dir / "MOCK_OUTPUT.txt").write_text("placeholder reactingFoam processor0 output\n")
+    else:
+        params = _load_params(params_path)
+        n_procs = params.openfoam.n_procs
 
-    # Stand in for reactingFoam's parallel-decomposition output directory
-    # until a real solver run is wired up.
-    processor_dir = case_dir / "processor0"
-    processor_dir.mkdir(parents=True, exist_ok=True)
-    (processor_dir / "MOCK_OUTPUT.txt").write_text("placeholder reactingFoam processor0 output\n")
+        _run_solver(["blockMesh"], cwd=case_dir, solver_name="blockMesh")
+
+        if n_procs > 1:
+            # decomposePar creates the processorN/ subdirectories dvc.yaml
+            # declares as this stage's output -- no separate mock stand-in
+            # needed for a real parallel run.
+            _run_solver(["decomposePar"], cwd=case_dir, solver_name="decomposePar")
+            _run_solver(
+                ["mpirun", "-np", str(n_procs), "reactingFoam", "-parallel"],
+                cwd=case_dir,
+                solver_name="reactingFoam",
+            )
+        else:
+            _run_solver(["reactingFoam"], cwd=case_dir, solver_name="reactingFoam")
 
     try:
         fluid_state_path = write_terminal_fluid_state(case_dir, mock=mock)
@@ -143,16 +178,18 @@ def warpx_configure(params_path: Path, fluid_state_path: Path, output_dir: Path)
 
 @warpx.command("run")
 @click.option("--case", "case_dir", required=True, type=click.Path(path_type=Path), help="WarpX case directory")
-@click.option("--mock", is_flag=True, default=False, help="Skip the real openPMD/HDF5 handshake and write placeholder outputs")
+@click.option("--mock", is_flag=True, default=False, help="Skip the real WarpX solve and openPMD/HDF5 handshake, and write placeholder outputs")
 def warpx_run(case_dir: Path, mock: bool) -> None:
     """Run the WarpX PIC solver on the configured case, then tally the substrate arrival flux."""
-    click.echo(f"[warpx run] would execute WarpX in {case_dir}")
-
-    # Stand in for WarpX's openPMD diagnostics output directory until a
-    # real PIC solver run is wired up.
-    openpmd_dir = case_dir / "diags" / "openpmd"
-    openpmd_dir.mkdir(parents=True, exist_ok=True)
-    (openpmd_dir / "MOCK_OUTPUT.txt").write_text("placeholder WarpX openPMD diagnostics output\n")
+    if mock:
+        click.echo(f"[warpx run] --mock: skipping WarpX in {case_dir}")
+        # Stand in for WarpX's openPMD diagnostics output directory until a
+        # real PIC solver run is wired up.
+        openpmd_dir = case_dir / "diags" / "openpmd"
+        openpmd_dir.mkdir(parents=True, exist_ok=True)
+        (openpmd_dir / "MOCK_OUTPUT.txt").write_text("placeholder WarpX openPMD diagnostics output\n")
+    else:
+        _run_solver(["warpx", "inputs"], cwd=case_dir, solver_name="warpx")
 
     try:
         flux_path = write_surface_bombardment_flux(case_dir, mock=mock)
@@ -195,15 +232,19 @@ def xolotl_configure(params_path: Path, flux_path: Path, output_dir: Path) -> No
 @click.option("--mock", is_flag=True, default=False, help="Write placeholder growth metrics instead of running the real Xolotl KMC solver")
 def xolotl_run(case_dir: Path, mock: bool) -> None:
     """Run the Xolotl cluster-dynamics/KMC solver on the configured case, then write growth metrics."""
-    click.echo(f"[xolotl run] would execute Xolotl in {case_dir}")
+    if mock:
+        click.echo(f"[xolotl run] --mock: skipping Xolotl in {case_dir}")
+        case_dir.mkdir(parents=True, exist_ok=True)
+        metrics_path = _write_crystal_growth_metrics(case_dir)
+        click.echo(f"[xolotl run] wrote crystal growth metrics to {metrics_path}")
+        return
 
-    if not mock:
-        raise click.ClickException(
-            "real Xolotl KMC solver integration is not implemented yet; pass --mock to write placeholder growth metrics"
-        )
+    _run_solver(["xolotl", "params.txt"], cwd=case_dir, solver_name="xolotl")
 
-    case_dir.mkdir(parents=True, exist_ok=True)
-    metrics_path = _write_crystal_growth_metrics(case_dir)
+    try:
+        metrics_path = write_crystal_growth_metrics(case_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        raise click.ClickException(f"{exc}; pass --mock to write placeholder growth metrics") from exc
     click.echo(f"[xolotl run] wrote crystal growth metrics to {metrics_path}")
 
 

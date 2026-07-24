@@ -2,7 +2,7 @@ schema: '2.0'
 stages:
   run_fluid_cfd:
     cmd: "cvd openfoam configure --params params.yaml --output-dir openfoam_case &&
-      cvd openfoam run --case openfoam_case --mock\n"
+      cvd openfoam run --case openfoam_case --params params.yaml --mock\n"
     deps:
     - path: ../_shared/openfoam/
       hash: md5
@@ -11,8 +11,8 @@ stages:
       nfiles: 1
     - path: params.yaml
       hash: md5
-      md5: cf3f42b93e1adc484ac6dde2a202fc10
-      size: 496
+      md5: f6d12ebb5f06b4bb172c995e006dd7d7
+      size: 509
     outs:
     - path: openfoam_case/processor0/
       hash: md5
@@ -38,8 +38,8 @@ stages:
       size: 221
     - path: params.yaml
       hash: md5
-      md5: cf3f42b93e1adc484ac6dde2a202fc10
-      size: 496
+      md5: f6d12ebb5f06b4bb172c995e006dd7d7
+      size: 509
     outs:
     - path: warpx_case/diags/openpmd/
       hash: md5
@@ -61,8 +61,8 @@ stages:
       nfiles: 1
     - path: params.yaml
       hash: md5
-      md5: cf3f42b93e1adc484ac6dde2a202fc10
-      size: 496
+      md5: f6d12ebb5f06b4bb172c995e006dd7d7
+      size: 509
     - path: warpx_case/surface_bombardment_flux.h5
       hash: md5
       md5: f9b170049b26da65a7b66ce4118dc195
