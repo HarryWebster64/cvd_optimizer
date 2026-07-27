@@ -128,7 +128,11 @@ class WarpXConfig(BaseModel):
 
 
 class XolotlConfig(_QuantityModel):
-    dimensions: int = Field(ge=1, le=3)
+    # 0 (point/spatially-independent cluster dynamics) is Xolotl's simplest
+    # real configuration and the only one validated end-to-end so far;
+    # 1-3 (true spatially-resolved dynamics, Xolotl's actual namesake
+    # purpose) need real gridParam/boundary/process wiring as a follow-up.
+    dimensions: int = Field(ge=0, le=3)
     runtime: Duration
     interstitial_traps: bool
 

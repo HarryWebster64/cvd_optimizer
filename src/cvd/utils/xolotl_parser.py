@@ -1,19 +1,33 @@
 """Xolotl output parsing.
 
-Xolotl writes cluster-dynamics results to a plain-text file in its case
-directory (conventionally `retentionOut.txt`). This module reads that file
-and converts it into crystal_growth_metrics.csv, matching the
+Xolotl writes cluster-dynamics results to `retentionOut.txt` in its case
+directory: a `#`-prefixed header naming each column, followed by one
+whitespace-delimited data row per timestep. This module reads that file and
+converts it into crystal_growth_metrics.csv, matching the
 `xolotl_case/crystal_growth_metrics.csv` output declared in dvc.yaml.
 
-Xolotl's real output columns depend on its solver configuration -- it was
-originally built to track helium retention in fusion first-wall components,
-not epitaxial growth -- so the mapping from raw cluster-dynamics quantities
-(interstitial/vacancy cluster concentrations) to `thickness` and
-`defect_density` will need real domain calibration once Xolotl is actually
-run against CVD substrate parameters. For now this parser expects
-`retentionOut.txt` to already contain whitespace-separated
-`time thickness defect_density` columns, one row per output timestep,
-consistent with the placeholder schema the rest of the pipeline expects.
+Column names depend on Xolotl's configuration (species tracked, material,
+etc.); this parser looks columns up by name from the header rather than by
+hardcoded position. Against our real W100 (tungsten PSI) configuration
+(workflows/_shared/xolotl/params.jinja2), a real run produces:
+
+    #time fluence Helium_content Vacancy_content Interstitial_content
+    Helium_bulk Vacancy_bulk Interstitial_bulk Helium_surface
+    Vacancy_surface Interstitial_surface Helium_burst Deuterium_burst
+    Tritium_burst
+
+Column mapping, determined by inspecting real output (not guessed):
+  - `time`           -> `time`, directly.
+  - `defect_density` -> `Vacancy_content + Interstitial_content`. This is a
+    physically sound mapping: vacancies and interstitials are exactly the
+    point defects being tracked, not an approximation.
+  - `thickness`      -> `fluence`. Xolotl/W100 models species *retention*
+    within a fixed-thickness substrate (its actual PSI/fusion-materials
+    purpose), not epitaxial layer growth, so there is no literal thickness
+    column to read. Cumulative fluence (particle arrival, monotonically
+    increasing) is the closest available proxy. This is an explicit
+    placeholder pending real growth-rate physics, not a validated
+    fluence-to-thickness conversion.
 """
 
 from __future__ import annotations
@@ -25,34 +39,59 @@ XOLOTL_OUTPUT_FILENAME = "retentionOut.txt"
 
 CSV_FIELDNAMES = ("time", "thickness", "defect_density")
 
+_TIME_COLUMN = "time"
+_THICKNESS_PROXY_COLUMN = "fluence"
+_DEFECT_COLUMNS = ("Vacancy_content", "Interstitial_content")
+
+
+def _parse_header(header_line: str) -> dict[str, int]:
+    """Map column name -> index from Xolotl's `#`-prefixed header line."""
+    names = header_line.lstrip("#").split()
+    return {name: index for index, name in enumerate(names)}
+
 
 def _parse_retention_file(retention_path: Path) -> list[dict[str, float]]:
-    """Parse Xolotl's whitespace-delimited retentionOut.txt into rows of
-    (time, thickness, defect_density). Blank lines and lines starting with
-    `#` (comments/headers) are skipped.
+    """Parse Xolotl's retentionOut.txt into rows of
+    (time, thickness, defect_density), mapping columns by name (see module
+    docstring) rather than assuming a fixed column layout.
     """
     rows: list[dict[str, float]] = []
+    column_index: dict[str, int] | None = None
+
     with open(retention_path) as f:
         for line_no, raw_line in enumerate(f, start=1):
             line = raw_line.strip()
-            if not line or line.startswith("#"):
+            if not line:
                 continue
 
-            columns = line.split()
-            if len(columns) < 3:
+            if line.startswith("#"):
+                column_index = _parse_header(line)
+                continue
+
+            if column_index is None:
                 raise ValueError(
-                    f"{retention_path}:{line_no}: expected 'time thickness defect_density', "
-                    f"got {line!r}"
+                    f"{retention_path}:{line_no}: data row before header line: {line!r}"
                 )
 
-            time_s, thickness, defect_density = columns[:3]
+            columns = line.split()
+            required = {_TIME_COLUMN, _THICKNESS_PROXY_COLUMN, *_DEFECT_COLUMNS}
+            missing = required - column_index.keys()
+            if missing:
+                raise ValueError(
+                    f"{retention_path}: header is missing expected column(s): {sorted(missing)}"
+                )
+
+            def value(name: str) -> float:
+                return float(columns[column_index[name]])
+
             rows.append(
                 {
-                    "time": float(time_s),
-                    "thickness": float(thickness),
-                    "defect_density": float(defect_density),
+                    "time": value(_TIME_COLUMN),
+                    "thickness": value(_THICKNESS_PROXY_COLUMN),
+                    "defect_density": sum(value(name) for name in _DEFECT_COLUMNS),
                 }
             )
+
     return rows
 
 

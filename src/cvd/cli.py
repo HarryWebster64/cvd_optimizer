@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 import click
+import h5py
 from jinja2 import Environment, FileSystemLoader
 from pydantic import ValidationError
 
@@ -204,10 +205,34 @@ def _warpx_flux_normalization(params: CVDParameters) -> tuple[float, float]:
     return substrate_area_m2, collection_window_s
 
 
+def _load_warpx_flux(flux_path: Path) -> dict[str, float]:
+    """Read the per-species substrate arrival flux written by
+    `cvd warpx run` (Data-Handshake B, src/cvd/utils/hdf5_mapper.py)."""
+    with h5py.File(flux_path, "r") as f:
+        return dict(f["bottom_wall_flux"].attrs)
+
+
+# 1 m^2 = (1e9 nm)^2 -- Xolotl's flux option is documented in #/nm^2/s
+# (ConfOptions.cpp), not SI #/m^2/s.
+_SQUARE_METERS_PER_SQUARE_NM = 1e-18
+
+
 def _render_xolotl_params(params: CVDParameters, flux_path: Path) -> str:
+    flux_by_species = _load_warpx_flux(flux_path)
+    # Xolotl's `flux` is a single scalar driving cluster nucleation, not a
+    # per-species map. Ions are what actually deposit into the growing
+    # lattice (electrons don't), so that's the value that maps onto it.
+    ion_flux_per_m2_per_s = flux_by_species.get("ions", 0.0)
+    ion_flux_per_nm2_per_s = ion_flux_per_m2_per_s * _SQUARE_METERS_PER_SQUARE_NM
+
     env = Environment(loader=FileSystemLoader(_XOLOTL_TEMPLATE_DIR))
     template = env.get_template(_XOLOTL_TEMPLATE_NAME)
-    return template.render(params=params, flux_path=flux_path)
+    return template.render(
+        params=params,
+        ion_flux_per_nm2_per_s=ion_flux_per_nm2_per_s,
+        substrate_temperature_k=params.chamber.substrate_temperature.to("kelvin").magnitude,
+        runtime_s=params.xolotl.runtime.to("second").magnitude,
+    )
 
 
 def _run_solver(cmd: list[str], cwd: Path, solver_name: str) -> None:

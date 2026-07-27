@@ -35,10 +35,13 @@ stages:
   run_surface_growth:
     cmd: >
       cvd xolotl configure --params params.yaml --flux-file warpx_case/surface_bombardment_flux.h5 --output-dir xolotl_case &&
-      cvd xolotl run --case xolotl_case --mock
+      cvd xolotl run --case xolotl_case
     deps:
       - params.yaml
       - ../_shared/xolotl/
       - warpx_case/surface_bombardment_flux.h5
     outs:
-      - xolotl_case/crystal_growth_metrics.csv
+      # Whole directory, same reasoning as the other two stages: a real
+      # Xolotl run produces retentionOut.txt, logs, and possibly
+      # checkpoint/network files beyond just the CSV we parse out of it.
+      - xolotl_case/

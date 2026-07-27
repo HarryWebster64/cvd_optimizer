@@ -41,17 +41,17 @@ stages:
     outs:
     - path: warpx_case/
       hash: md5
-      md5: 1437f8d6285a17bdad7ca70efeae7684.dir
+      md5: 44848053929f81bddb6d5add9fe4217b.dir
       size: 788042
       nfiles: 17
   run_surface_growth:
     cmd: "cvd xolotl configure --params params.yaml --flux-file warpx_case/surface_bombardment_flux.h5
-      --output-dir xolotl_case && cvd xolotl run --case xolotl_case --mock\n"
+      --output-dir xolotl_case && cvd xolotl run --case xolotl_case\n"
     deps:
     - path: ../_shared/xolotl/
       hash: md5
-      md5: e88ff981abe36e0ef6e70029a3ecaab8.dir
-      size: 444
+      md5: 4653cd376ec144fc8818bee47304b08d.dir
+      size: 1504
       nfiles: 1
     - path: params.yaml
       hash: md5
@@ -63,7 +63,8 @@ stages:
       md5: 8d422c7c4fb4c6e96d41a6d0a5b6235a
       size: 6232
     outs:
-    - path: xolotl_case/crystal_growth_metrics.csv
+    - path: xolotl_case/
       hash: md5
-      md5: a6610d2c276752dcda98330e853150f5
-      size: 175
+      md5: 59f5c2cf6d099f63c7176b4e673acb7e.dir
+      size: 230416
+      nfiles: 5
