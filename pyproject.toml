@@ -11,6 +11,7 @@ dependencies = [
     "dvc>=3.67.1",
     "h5py>=3.16.0",
     "jinja2>=3.1.6",
+    "matplotlib>=3.11.1",
     "pint>=0.25.3",
     "pydantic>=2.13.4",
     "pyvista>=0.48.4",

@@ -455,5 +455,212 @@ def xolotl_run(case_dir: Path, mock: bool) -> None:
     click.echo(f"[xolotl run] wrote crystal growth metrics to {metrics_path}")
 
 
+# ---------------------------------------------------------------------------
+# visualize: chart the pipeline's final results
+# ---------------------------------------------------------------------------
+
+# Chart chrome, from the dataviz skill's reference palette (references/palette.md).
+_CHART_SURFACE = "#fcfcfb"
+_CHART_INK_PRIMARY = "#0b0b0b"
+_CHART_INK_SECONDARY = "#52514e"
+_CHART_INK_MUTED = "#898781"
+_CHART_GRIDLINE = "#e1e0d9"
+_CHART_AXIS = "#c3c2b7"
+_CHART_SERIES_THICKNESS = "#2a78d6"  # categorical slot 1, blue
+_CHART_SERIES_DEFECT = "#eb6834"  # categorical slot 2, orange
+
+
+def _read_crystal_growth_metrics(csv_path: Path) -> list[dict[str, float]]:
+    with open(csv_path, newline="") as f:
+        reader = csv.DictReader(f)
+        return [
+            {
+                "time": float(row["time"]),
+                "thickness": float(row["thickness"]),
+                "defect_density": float(row["defect_density"]),
+            }
+            for row in reader
+        ]
+
+
+def _plot_crystal_growth(rows: list[dict[str, float]], output_path: Path) -> None:
+    # Imported here, not at module level: matplotlib is only needed for this
+    # one command, and "Agg" must be selected before pyplot is imported.
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    time = [row["time"] for row in rows]
+    thickness = [row["thickness"] for row in rows]
+    defect_density = [row["defect_density"] for row in rows]
+
+    # Two stacked panels sharing the time axis, not one dual-axis plot --
+    # thickness and defect_density are wildly different scales, and a
+    # dual-axis chart is misleading (see the dataviz skill's non-negotiables).
+    fig, (ax_thickness, ax_defect) = plt.subplots(
+        2, 1, figsize=(8, 6), sharex=True, facecolor=_CHART_SURFACE
+    )
+
+    for ax, values, color, title, ylabel in (
+        (ax_thickness, thickness, _CHART_SERIES_THICKNESS, "Thickness (growth proxy)", "Thickness"),
+        (ax_defect, defect_density, _CHART_SERIES_DEFECT, "Defect Density", "Defect density"),
+    ):
+        ax.set_facecolor(_CHART_SURFACE)
+        ax.plot(time, values, color=color, linewidth=2, solid_capstyle="round")
+        ax.set_title(title, color=_CHART_INK_PRIMARY, fontsize=11, loc="left")
+        ax.set_ylabel(ylabel, color=_CHART_INK_SECONDARY, fontsize=9)
+        ax.grid(True, color=_CHART_GRIDLINE, linewidth=0.8)
+        ax.tick_params(colors=_CHART_INK_MUTED, labelsize=8)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color(_CHART_AXIS)
+
+    ax_defect.set_xlabel("Time (s)", color=_CHART_INK_SECONDARY, fontsize=9)
+    fig.suptitle("Crystal Growth Metrics", color=_CHART_INK_PRIMARY, fontsize=13, fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, facecolor=_CHART_SURFACE)
+    plt.close(fig)
+
+
+def _write_pvd_collection(pvd_path: Path, frames: list[tuple[float, str]]) -> None:
+    """Write a ParaView Data (.pvd) collection: XML pointing at a set of
+    per-timestep VTK files so ParaView loads and animates them as one
+    time series, rather than needing each frame opened by hand."""
+    import xml.etree.ElementTree as ET
+
+    root = ET.Element("VTKFile", type="Collection", version="0.1", byte_order="LittleEndian")
+    collection = ET.SubElement(root, "Collection")
+    for time_value, filename in frames:
+        ET.SubElement(
+            collection, "DataSet", timestep=str(time_value), group="", part="0", file=filename
+        )
+
+    tree = ET.ElementTree(root)
+    ET.indent(tree, space="  ")
+    tree.write(pvd_path, xml_declaration=True, encoding="UTF-8")
+
+
+def _write_xolotl_paraview_series(
+    rows: list[dict[str, float]], output_dir: Path, n_frames: int = 40
+) -> Path:
+    """Write a ParaView-openable time series (.vtp snapshots + a .pvd
+    collection) showing the crystal's growth history, built from real
+    crystal_growth_metrics.csv data -- there's no OpenFOAM-style native
+    ParaView format for Xolotl to piggyback on, so this is a from-scratch
+    VTK mesh, not a converted/wrapped Xolotl file.
+
+    Each snapshot is a solid cylinder built from the growth layers
+    deposited up to that time; a "defect_density" scalar is baked into
+    each layer at the value current when it was laid down, so the
+    finished crystal shows a real banded defect-history profile through
+    its height (early = low defect, later = higher, matching our data) --
+    not a single uniform color. The cylinder's radius and total height are
+    nominal display units, not literal nanometers: `thickness` is itself
+    an explicit fluence-based growth proxy (see xolotl_parser.py), so a
+    second layer of unit fabrication here wouldn't add real precision.
+    """
+    import numpy as np
+    import pyvista as pv
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    n_frames = min(n_frames, len(rows))
+    frame_row_indices = np.linspace(0, len(rows) - 1, n_frames).astype(int)
+
+    max_thickness = max(row["thickness"] for row in rows) or 1.0
+    nominal_radius = 1.0
+    nominal_max_height = 4.0
+
+    def scaled_height(thickness: float) -> float:
+        return thickness / max_thickness * nominal_max_height
+
+    frames: list[tuple[float, str]] = []
+    for frame_number, row_index in enumerate(frame_row_indices):
+        layers = []
+        prev_height = 0.0
+        for i in range(row_index + 1):
+            height = scaled_height(rows[i]["thickness"])
+            if height - prev_height < 1e-6:
+                continue
+            layer = pv.Cylinder(
+                center=(0, 0, (prev_height + height) / 2),
+                direction=(0, 0, 1),
+                radius=nominal_radius,
+                height=height - prev_height,
+                resolution=48,
+            )
+            layer.cell_data["defect_density"] = np.full(layer.n_cells, rows[i]["defect_density"])
+            layers.append(layer)
+            prev_height = height
+
+        crystal = (
+            pv.merge(layers)
+            if layers
+            else pv.Cylinder(center=(0, 0, 0), direction=(0, 0, 1), radius=nominal_radius, height=1e-6)
+        )
+
+        frame_filename = f"crystal_{frame_number:04d}.vtp"
+        crystal.save(output_dir / frame_filename)
+        frames.append((rows[row_index]["time"], frame_filename))
+
+    pvd_path = output_dir / "crystal_growth.pvd"
+    _write_pvd_collection(pvd_path, frames)
+    return pvd_path
+
+
+def _print_fluid_state_summary(fluid_state: dict) -> None:
+    boundary_layer = fluid_state["substrate_boundary_layer"]
+    temperature_k = boundary_layer["temperature"]
+    mass_fractions = boundary_layer["mass_fractions"]
+
+    click.echo()
+    click.echo("=== Terminal Fluid State (OpenFOAM) ===")
+    click.echo(f"Substrate temperature: {temperature_k:.2f} K")
+    click.echo("Gas mass fractions:")
+    for species, fraction in mass_fractions.items():
+        click.echo(f"  {species:<6} {fraction * 100:6.2f}%")
+
+
+@main.command("visualize")
+@click.option("--xolotl-case", "xolotl_case_dir", default="xolotl_case", type=click.Path(path_type=Path), help="Xolotl case directory containing crystal_growth_metrics.csv")
+@click.option("--openfoam-case", "openfoam_case_dir", default="openfoam_case", type=click.Path(path_type=Path), help="OpenFOAM case directory containing case.foam")
+@click.option("--warpx-case", "warpx_case_dir", default="warpx_case", type=click.Path(path_type=Path), help="WarpX case directory containing diags/")
+@click.option("--output", "output_path", default="growth_plot.png", type=click.Path(path_type=Path), help="Path to write the growth plot PNG")
+def visualize(xolotl_case_dir: Path, openfoam_case_dir: Path, warpx_case_dir: Path, output_path: Path) -> None:
+    """Plot crystal growth metrics, summarize the terminal fluid state, and
+    point to every ParaView-openable file the pipeline produced."""
+    metrics_path = xolotl_case_dir / "crystal_growth_metrics.csv"
+    if not metrics_path.exists():
+        raise click.ClickException(f"crystal growth metrics not found: {metrics_path}")
+
+    rows = _read_crystal_growth_metrics(metrics_path)
+    if not rows:
+        raise click.ClickException(f"{metrics_path} has no data rows")
+
+    _plot_crystal_growth(rows, output_path)
+    click.echo(f"[visualize] wrote growth plot to {output_path}")
+
+    fluid_state = _load_fluid_state(openfoam_case_dir / "terminal_fluid_state.json")
+    _print_fluid_state_summary(fluid_state)
+
+    paraview_dir = xolotl_case_dir / "paraview"
+    pvd_path = _write_xolotl_paraview_series(rows, paraview_dir)
+    click.echo(f"[visualize] wrote Xolotl ParaView time series to {pvd_path}")
+
+    click.echo()
+    click.echo("=== Open in ParaView ===")
+    case_foam_path = openfoam_case_dir / "case.foam"
+    if case_foam_path.exists():
+        click.echo(f"  OpenFOAM (mesh + fields):  {case_foam_path}")
+    warpx_pmd_paths = sorted((warpx_case_dir / "diags").glob("*/paraview.pmd")) + sorted(
+        (warpx_case_dir / "diags").glob("*/*/paraview.pmd")
+    )
+    for pmd_path in warpx_pmd_paths:
+        click.echo(f"  WarpX (plasma particles):  {pmd_path}")
+    click.echo(f"  Xolotl (crystal growth):   {pvd_path}")
+
+
 if __name__ == "__main__":
     main()
